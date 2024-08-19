@@ -1,0 +1,10 @@
+.vs/
+Build/
+Bundles/
+obj/
+
+*.vcxproj.user
+*.aps
+
+VKD-Redux_CA.pvk
+VKD-Redux_SPC.*
