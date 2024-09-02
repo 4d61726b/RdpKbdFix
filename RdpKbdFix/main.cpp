@@ -26,6 +26,44 @@ static HMODULE g_hSelf = nullptr;
 static HOOKPROC g_pVMwareHookFunc = nullptr;
 static HKL g_hklCurrentKeyboard = nullptr;
 
+static void ExitPrompt(const std::wstring& wstrMsg=L"")
+{
+    std::wcout << std::format(L"{}\nPress ENTER to exit\n", wstrMsg);
+    std::cin.get();
+}
+
+static bool SetPrivilege(HANDLE hToken,
+                         LPCWSTR lpszPrivilege,
+                         bool bEnablePrivilege)
+{
+    TOKEN_PRIVILEGES tp;
+    LUID luid;
+
+    if (!LookupPrivilegeValueW(nullptr, lpszPrivilege, &luid))
+    {
+        std::wcout << std::format(L"LookupPrivilegeValueW failed with {}\n", GetLastError());
+        return false;
+    }
+
+    tp.PrivilegeCount = 1;
+    tp.Privileges[0].Luid = luid;
+    tp.Privileges[0].Attributes = bEnablePrivilege ? SE_PRIVILEGE_ENABLED : 0;
+
+    if (!AdjustTokenPrivileges(hToken,
+                               FALSE,
+                               &tp,
+                               sizeof(TOKEN_PRIVILEGES),
+                               nullptr,
+                               nullptr)
+        || GetLastError() == ERROR_NOT_ALL_ASSIGNED)
+    {
+        std::wcout << std::format(L"AdjustTokenPrivileges failed with {}\n", GetLastError());
+        return false;
+    }
+
+    return true;
+}
+
 static LRESULT __stdcall HookFunc(int nCode, WPARAM wParam, LPARAM lParam)
 {
     if (nCode >= 0 && (wParam == WM_KEYDOWN || wParam == WM_KEYUP))
@@ -246,7 +284,7 @@ DWORD WINAPI GlobalHookThread(LPVOID lpParam)
     HHOOK hhkHook = SetWindowsHookExW(WH_KEYBOARD_LL, HookFuncGlobal, nullptr, 0);
 
     MSG msg = { 0 };
-    while (GetMessageW(&msg, NULL, 0, 0))
+    while (GetMessageW(&msg, nullptr, 0, 0))
     {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
@@ -270,18 +308,35 @@ static void Entry(bool bWithGlobalHook)
         proc32.dwSize = sizeof(proc32);
 
         AllocConsole();
+        freopen_s(&fileTmp, "CONIN$", "r", stdin);
         freopen_s(&fileTmp, "CONOUT$", "w", stdout);
+        freopen_s(&fileTmp, "CONOUT$", "w", stderr);
 
         CHandle hMutex = CHandle(CreateMutexW(nullptr, TRUE, MUTEX_NAME));
         if (!hMutex || GetLastError() == ERROR_ALREADY_EXISTS)
         {
-            std::wcout << L"LowLevelkeyboardHookFix already running. Aborting.\n";
+            ExitPrompt(L"LowLevelkeyboardHookFix already running. Aborting.\n");
             return;
         }
 
+        HANDLE hThisProcToken;
+        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES, &hThisProcToken))
+        {
+            ExitPrompt(std::format(L"OpenProcessToken failed with {}\n", GetLastError()));
+            return;
+        }
+
+        if (!SetPrivilege(hThisProcToken, SE_DEBUG_NAME, true))
+        {
+            ExitPrompt(L"Hint: Run as Admin / Check Permissions\n");
+            CloseHandle(hThisProcToken);
+            return;
+        }
+        CloseHandle(hThisProcToken);
+
         if (!GetModuleFileNameW(g_hSelf, wszModFileName, _countof(wszModFileName)))
         {
-            std::wcout << std::format(L"GetModuleFileNameW failed with {}\n", GetLastError());
+            ExitPrompt(std::format(L"GetModuleFileNameW failed with {}\n", GetLastError()));
             return;
         }
 
@@ -400,13 +455,13 @@ static void Entry(bool bWithGlobalHook)
             }
             catch (...)
             {
-                std::wcout << L"Exception while monitoring for processes\n";
+                ExitPrompt(L"Exception while monitoring for processes\n");
             }
         }
     }
     catch (...)
     {
-        std::wcout << L"Exception in Run() function\n";
+        ExitPrompt(L"Exception in Run() function\n");
     }
 }
 
