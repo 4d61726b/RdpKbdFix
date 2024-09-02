@@ -6,6 +6,8 @@
 #include <format>
 #include <unordered_map>
 
+#define VERSION_STR                 L"1.1"
+
 #ifdef _WIN64
 #define MUTEX_NAME                  L"Global\\LowLevelKeyboardHookFix64"
 #else
@@ -311,6 +313,8 @@ static void Entry(bool bWithGlobalHook)
         freopen_s(&fileTmp, "CONIN$", "r", stdin);
         freopen_s(&fileTmp, "CONOUT$", "w", stdout);
         freopen_s(&fileTmp, "CONOUT$", "w", stderr);
+
+        std::wcout << std::format(L"RdpKbdFix Version {}\n\n", VERSION_STR);
 
         CHandle hMutex = CHandle(CreateMutexW(nullptr, TRUE, MUTEX_NAME));
         if (!hMutex || GetLastError() == ERROR_ALREADY_EXISTS)
