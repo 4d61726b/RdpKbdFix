@@ -6,7 +6,7 @@
 #include <format>
 #include <unordered_map>
 
-#define VERSION_STR                 L"1.1"
+#define VERSION_STR                 L"1.2"
 
 #ifdef _WIN64
 #define MUTEX_NAME                  L"Global\\LowLevelKeyboardHookFix64"
@@ -66,19 +66,110 @@ static bool SetPrivilege(HANDLE hToken,
     return true;
 }
 
+static bool IsShiftKeyPressed(DWORD c)
+{
+    // Fast keyboard jump table
+    switch (c)
+    {
+    case 'Q':
+    case 'W':
+    case 'E':
+    case 'R':
+    case 'T':
+    case 'Y':
+    case 'U':
+    case 'I':
+    case 'O':
+    case 'P':
+    case 'A':
+    case 'S':
+    case 'D':
+    case 'F':
+    case 'G':
+    case 'H':
+    case 'J':
+    case 'K':
+    case 'L':
+    case 'Z':
+    case 'X':
+    case 'C':
+    case 'V':
+    case 'B':
+    case 'N':
+    case 'M':
+    case '~':
+    case '!':
+    case '@':
+    case '#':
+    case '$':
+    case '%':
+    case '^':
+    case '&':
+    case '*':
+    case '(':
+    case ')':
+    case '_':
+    case '+':
+    case '{':
+    case '}':
+    case '|':
+    case ':':
+    case '"':
+    case '<':
+    case '>':
+    case '?':
+        return true;
+    default:
+        return false;
+    }
+}
+
+static void TranslateVKPacket(WPARAM wParam, PKBDLLHOOKSTRUCT pkbdStruct)
+{
+    static bool bReportedShiftDown = false;
+    DWORD dwCurrentKeyIdx = 0;
+    INPUT input[2] = { 0 };
+
+    if (IsShiftKeyPressed(pkbdStruct->scanCode) != bReportedShiftDown)
+    {
+        input[0].type = INPUT_KEYBOARD;
+        input[0].ki.wScan = static_cast<WORD>(MapVirtualKeyA(VK_LSHIFT, MAPVK_VK_TO_VSC));
+        input[0].ki.dwFlags = KEYEVENTF_SCANCODE;
+
+        if (bReportedShiftDown)
+        {
+            input[0].ki.dwFlags |= KEYEVENTF_KEYUP;
+        }
+
+        bReportedShiftDown = !bReportedShiftDown;
+        ++dwCurrentKeyIdx;
+    }
+
+    pkbdStruct->vkCode = VkKeyScanExA(static_cast<CHAR>(pkbdStruct->scanCode), g_hklCurrentKeyboard) & 0xff;
+    pkbdStruct->scanCode = MapVirtualKeyA(pkbdStruct->vkCode, MAPVK_VK_TO_VSC);
+
+    input[dwCurrentKeyIdx].type = INPUT_KEYBOARD;
+    input[dwCurrentKeyIdx].ki.wScan = static_cast<WORD>(pkbdStruct->scanCode);
+    input[dwCurrentKeyIdx].ki.dwFlags = KEYEVENTF_SCANCODE;
+
+    if (wParam == WM_KEYUP)
+    {
+        input[dwCurrentKeyIdx].ki.dwFlags |= KEYEVENTF_KEYUP;
+    }
+
+    SendInput(dwCurrentKeyIdx + 1, input, sizeof(INPUT));
+}
+
 static LRESULT __stdcall HookFunc(int nCode, WPARAM wParam, LPARAM lParam)
 {
-    if (nCode >= 0 && (wParam == WM_KEYDOWN || wParam == WM_KEYUP))
-    {
-        PKBDLLHOOKSTRUCT pkbdStruct = reinterpret_cast<PKBDLLHOOKSTRUCT>(lParam);
+    PKBDLLHOOKSTRUCT pkbdStruct = reinterpret_cast<PKBDLLHOOKSTRUCT>(lParam);
 
-        if (pkbdStruct->vkCode == VK_PACKET)
-        {
-            KBDLLHOOKSTRUCT kbdStructNew = *pkbdStruct;
-            kbdStructNew.vkCode = VkKeyScanExA(static_cast<CHAR>(kbdStructNew.scanCode), g_hklCurrentKeyboard) & 0xff;
-            kbdStructNew.scanCode = MapVirtualKeyA(kbdStructNew.vkCode, MAPVK_VK_TO_VSC);
-            return g_pVMwareHookFunc(nCode, wParam, reinterpret_cast<LPARAM>(&kbdStructNew));
-        }
+    if (nCode >= 0 &&
+        (wParam == WM_KEYDOWN || wParam == WM_KEYUP) &&
+        pkbdStruct->vkCode == VK_PACKET)
+    {
+        TranslateVKPacket(wParam, pkbdStruct);
+        return 1;
     }
 
     return g_pVMwareHookFunc(nCode, wParam, lParam);
@@ -86,29 +177,14 @@ static LRESULT __stdcall HookFunc(int nCode, WPARAM wParam, LPARAM lParam)
 
 static LRESULT __stdcall HookFuncGlobal(int nCode, WPARAM wParam, LPARAM lParam)
 {
-    if (nCode >= 0 && (wParam == WM_KEYDOWN || wParam == WM_KEYUP))
+    PKBDLLHOOKSTRUCT pkbdStruct = reinterpret_cast<PKBDLLHOOKSTRUCT>(lParam);
+
+    if (nCode >= 0                                      &&
+        (wParam == WM_KEYDOWN || wParam == WM_KEYUP)    &&
+        pkbdStruct->vkCode == VK_PACKET)
     {
-        PKBDLLHOOKSTRUCT pkbdStruct = reinterpret_cast<PKBDLLHOOKSTRUCT>(lParam);
-
-        if (pkbdStruct->vkCode == VK_PACKET)
-        {
-            KBDLLHOOKSTRUCT kbdStructNew = *pkbdStruct;
-            kbdStructNew.vkCode = VkKeyScanExA(static_cast<CHAR>(kbdStructNew.scanCode), g_hklCurrentKeyboard) & 0xff;
-            kbdStructNew.scanCode = MapVirtualKeyA(kbdStructNew.vkCode, MAPVK_VK_TO_VSC);
-
-            INPUT input[1] = { 0 };
-            input[0].type = INPUT_KEYBOARD;
-            input[0].ki.wScan = static_cast<WORD>(kbdStructNew.scanCode);
-            input[0].ki.dwFlags = KEYEVENTF_SCANCODE;
-
-            if (wParam == WM_KEYUP)
-            {
-                input[0].ki.dwFlags |= KEYEVENTF_KEYUP;
-            }
-
-            SendInput(ARRAYSIZE(input), input, sizeof(INPUT));
-            return 0;
-        }
+        TranslateVKPacket(wParam, pkbdStruct);
+        return 1;
     }
 
     return CallNextHookEx(nullptr, nCode, wParam, lParam);
